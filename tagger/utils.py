@@ -3,7 +3,7 @@ from pathlib import Path
 
 from modules import scripts
 from tagger.preset import Preset
-from tagger.interrogator import Interrogator, WaifuDiffusionInterrogator
+from tagger.interrogator import Interrogator, WaifuDiffusionInterrogator, OppaiInterrogator
 
 preset = Preset(Path(scripts.basedir(), 'presets'))
 
@@ -80,6 +80,20 @@ def refresh_interrogators() -> List[str]:
         'wd14-convnext': WaifuDiffusionInterrogator(
             'wd14-convnext',
             repo_id='SmilingWolf/wd-v1-4-convnext-tagger'
+        ),
+        'oppai-onnx-v1.1': OppaiInterrogator(
+            'oppai-onnx-v1.1',
+            repo_id='Grio43/OppaiOracle',
+            model_path='V1.1_onnx/model.onnx',
+            tags_path='V1.1_onnx/selected_tags.csv',
+            preproc_path='V1.1_onnx/preprocessing.json'
+        ),
+        'oppai-onnx-v1': OppaiInterrogator(
+            'oppai-onnx-v1',
+            repo_id='Grio43/OppaiOracle',
+            model_path='V1_onnx/model.onnx',
+            tags_path='V1_onnx/selected_tags.csv',
+            preproc_path='V1_onnx/preprocessing.json'
         ),
     }
 

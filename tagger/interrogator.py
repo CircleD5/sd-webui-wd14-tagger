@@ -10,14 +10,16 @@ from pathlib import Path
 from huggingface_hub import hf_hub_download
 
 from modules import shared
-from modules.deepbooru import re_special as tag_escape_pattern
+import re
+
+tag_escape_pattern = re.compile(r'([\\()])')
 
 # i'm not sure if it's okay to add this file to the repository
 from . import dbimutils
 
 # select a device to process
-use_cpu = ('all' in shared.cmd_opts.use_cpu) or (
-        'interrogate' in shared.cmd_opts.use_cpu)
+_use_cpu = getattr(shared.cmd_opts, "use_cpu", []) or []
+use_cpu = ('all' in _use_cpu) or ('interrogate' in _use_cpu)
 
 
 class Interrogator:
@@ -200,3 +202,96 @@ class WaifuDiffusionInterrogator(Interrogator):
         tags = dict(tags[4:].values)
 
         return ratings, tags
+class OppaiInterrogator(Interrogator):
+    def __init__(
+            self,
+            name: str,
+            model_path='model.onnx',
+            tags_path='selected_tags.csv',
+            preproc_path='preprocessing.json',
+            **kwargs
+    ) -> None:
+        super().__init__(name)
+        self.model_path = model_path
+        self.tags_path = tags_path
+        self.preproc_path = preproc_path
+        self.kwargs = kwargs
+
+    def download(self) -> Tuple[os.PathLike, os.PathLike, os.PathLike]:
+        print(f"Loading {self.name} model file from {self.kwargs['repo_id']}")
+        model_path = Path(hf_hub_download(**self.kwargs, filename=self.model_path))
+        tags_path = Path(hf_hub_download(**self.kwargs, filename=self.tags_path))
+        preproc_path = Path(hf_hub_download(**self.kwargs, filename=self.preproc_path))
+        return model_path, tags_path, preproc_path
+
+    def load(self) -> None:
+        model_path, tags_path, preproc_path = self.download()
+        
+        from launch import is_installed, run_pip
+        if not is_installed('onnxruntime'):
+            package = os.environ.get('ONNXRUNTIME_PACKAGE', 'onnxruntime-gpu')
+            run_pip(f'install {package}', 'onnxruntime')
+
+        from onnxruntime import InferenceSession
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        if use_cpu:
+            providers.pop(0)
+
+        self.model = InferenceSession(str(model_path), providers=providers)
+        print(f'Loaded {self.name} model from {model_path}')
+
+        import csv
+        import json
+        self.tag_names = []
+        self.categories = []
+        with open(tags_path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                self.tag_names.append(row["name"])
+                self.categories.append(int(row["category"]))
+        
+        self.skip_mask = np.zeros(len(self.tag_names), dtype=bool)
+        for i, name in enumerate(self.tag_names):
+            if name in ("<PAD>", "<UNK>"):
+                self.skip_mask[i] = True
+
+        with open(preproc_path, encoding="utf-8") as f:
+            preproc = json.load(f)
+        self.image_size = int(preproc["image_size"])
+        self.pad_color = tuple(int(c) for c in preproc["pad_color_rgb"])
+        self.mean = np.array(preproc["normalize_mean"], dtype=np.float32).reshape(3, 1, 1)
+        self.std = np.array(preproc["normalize_std"], dtype=np.float32).reshape(3, 1, 1)
+
+    def interrogate(self, image: Image) -> Tuple[Dict[str, float], Dict[str, float]]:
+        if not hasattr(self, 'model') or self.model is None:
+            self.load()
+
+        img = image.convert("RGB")
+        w, h = img.size
+        size = self.image_size
+        scale = min(size / w, size / h)
+        nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+        resized = img.resize((nw, nh), Image.BICUBIC)
+        canvas = Image.new("RGB", (size, size), self.pad_color)
+        x0 = (size - nw) // 2
+        y0 = (size - nh) // 2
+        canvas.paste(resized, (x0, y0))
+        mask = np.ones((size, size), dtype=bool)
+        mask[y0:y0 + nh, x0:x0 + nw] = False
+
+        arr = np.asarray(canvas, dtype=np.float32) / 255.0
+        arr = arr.transpose(2, 0, 1)
+        arr = (arr - self.mean) / self.std
+        pixel_values = arr.astype(np.float32)
+
+        outputs = self.model.run(["probabilities"], {
+            "pixel_values": pixel_values[None, ...],
+            "padding_mask": mask[None, ...],
+        })
+        probs = outputs[0][0].astype(np.float32)
+
+        tags = {}
+        for i, p in enumerate(probs):
+            if not self.skip_mask[i] and p > 0:
+                tags[self.tag_names[i]] = float(p)
+                
+        return {}, tags

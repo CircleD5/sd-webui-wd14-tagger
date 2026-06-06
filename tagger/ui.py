@@ -9,7 +9,10 @@ from PIL import Image, UnidentifiedImageError
 
 from modules.call_queue import wrap_gradio_gpu_call
 from modules import ui
-from modules import generation_parameters_copypaste as parameters_copypaste
+try:
+    from modules import generation_parameters_copypaste as parameters_copypaste
+except ImportError:
+    from modules import infotext_utils as parameters_copypaste
 
 from tagger import format, utils
 from tagger.utils import split_str
@@ -406,13 +409,18 @@ def on_ui_tabs():
                 )
 
                 with gr.Row():
-                    parameters_copypaste.bind_buttons(
-                        parameters_copypaste.create_buttons(
-                            ["txt2img", "img2img"],
-                        ),
-                        None,
-                        tags
-                    )
+                    send_buttons = parameters_copypaste.create_buttons(["txt2img", "img2img"])
+                    if hasattr(parameters_copypaste, 'bind_buttons'):
+                        parameters_copypaste.bind_buttons(send_buttons, None, tags)
+                    else:
+                        for tabname, button in send_buttons.items():
+                            parameters_copypaste.register_paste_params_button(
+                                parameters_copypaste.ParamBinding(
+                                    paste_button=button, 
+                                    tabname=tabname, 
+                                    source_text_component=tags
+                                )
+                            )
 
                 rating_confidents = gr.Label(
                     label='Rating confidents',

@@ -4,7 +4,13 @@ from modules.api import models as sd_models
 from pydantic import BaseModel, Field
 
 
-class TaggerInterrogateRequest(sd_models.InterrogateRequest):
+class TaggerInterrogateRequest(BaseModel):
+    image: str = Field(
+        default="", 
+        title="Image", 
+        description="Image to work on, must be a Base64 string containing the image's data."
+    )
+    
     model: str = Field(
         title='Model',
         description='The interrogate model used.'
